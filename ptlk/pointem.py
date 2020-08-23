@@ -250,46 +250,57 @@ class PointEM(torch.nn.Module):
             vis.matplot(plt)
 
         k = f_target.shape[-1]
-        pi_batch, mu_batch, sigma_batch = self.compute_gaussian_parameters(f_target)
         
-        for b in range(batch_size):
-            import pdb; pdb.set_trace()
-            #gmm = list_gmm[b]
-            pi = pi_batch[b] #gmm["weights"]
-            mu = mu_batch[b] #gmm["means"]
-            sigma = sigma_batch[b] #gmm["covars"]
-            sigma_inv = torch.inverse(sigma)
-            
+        #sigma_inv_batch = torch.inverse(sigma_batch)
+        self.sigma = 1e-1 
+        f_target_n = f_target/self.sigma
+        f_source_n = f_source/self.sigma
+        #_, mu_batch, _ = self.compute_gaussian_parameters(f_target)
+        mu_batch = f_target_n.mean(axis=1) 
 
-            diff = f_source[b].unsqueeze(1) - mu #NxJx3
-            diff = diff.unsqueeze(3)
+        diff = f_source_n - mu_batch.unsqueeze(1) #BxF
+        #diff = diff.unsqueeze(3)
 
-            #if torch.det(sigma) == 1:
-            #    normalize = torch.det(sigma)
-            #else:
-            #    normalize = (2*np.pi)**(-k/2)* 1/ torch.sqrt(torch.det(sigma)+eps)
-            normalize = 1
+        dist = -0.5* (diff**2).sum(axis=2)#torch.matmul((torch.matmul(diff.transpose(1,2), sigma_inv_batch.repeat(diff.shape[0],1,1)) ), diff).squeeze(2).squeeze(2)
+        d_range = 10#10
+        probs = torch.exp(torch.clamp(dist, -d_range, d_range))
+        m0 = probs #* pi.unsqueeze(0) #Nx1
+        
+        m1 = m0.unsqueeze(2) * p_target #Nx3
 
-            dist = -0.5* torch.matmul((torch.matmul(diff.transpose(2,3), sigma_inv.unsqueeze(0).repeat(diff.shape[0],1,1,1)) ), diff).squeeze(2).squeeze(2)
-            d_range = 70#10
-            probs = torch.exp(torch.clamp(dist, -d_range, d_range))
-            m0 = probs * pi.unsqueeze(0) #Nx1
-            
-            m1 = m0 * p_target[0] #Nx3
 
-            #rij = exp_sum#/ (eps+exp_sum.sum(axis=1).unsqueeze(1)) 
-            #don't normalize! it's ill conditioned when there's only one Gaussian...
+        #for b in range(batch_size):
+        #    import pdb; pdb.set_trace()
+        #    #gmm = list_gmm[b]
+        #    pi = pi_batch[b] #gmm["weights"]
+        #    mu = mu_batch[b] #gmm["means"]
+        #    sigma = sigma_batch[b] #gmm["covars"]
+        #    sigma_inv = torch.inverse(sigma)
+        #    
+#
+        #    diff = f_source[b].unsqueeze(1) - mu #NxJx3
+        #    diff = diff.unsqueeze(3)
+#
+        #    #if torch.det(sigma) == 1:
+        #    #    normalize = torch.det(sigma)
+        #    #else:
+        #    #    normalize = (2*np.pi)**(-k/2)* 1/ torch.sqrt(torch.det(sigma)+eps)
+        #    normalize = 1
+#
+        #    
+        #    #rij = exp_sum#/ (eps+exp_sum.sum(axis=1).unsqueeze(1)) 
+        #    #don't normalize! it's ill conditioned when there's only one Gaussian...
+#
+        #    list_m0.append(m0)
+        #    list_m1.append(m1)
+#
+        #    #import pdb; pdb.set_trace()            
+        #    #m = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
+        #    #torch.exp(m.log_prob(points[0,0]))
+        #    if rij.sum() != rij.sum():
+        #        import pdb; pdb.set_trace()
 
-            list_m0.append(m0)
-            list_m1.append(m1)
-
-            #import pdb; pdb.set_trace()            
-            #m = torch.distributions.multivariate_normal.MultivariateNormal(mu, sigma)
-            #torch.exp(m.log_prob(points[0,0]))
-            if rij.sum() != rij.sum():
-                import pdb; pdb.set_trace()
-
-        return list_m0, list_m1
+        return m0, m1
 
     def compute_kabsch(self, source, target, weights):
 
@@ -321,28 +332,31 @@ class PointEM(torch.nn.Module):
 
         return R, t
 
-    def m_step(self,p0, p1,list_m0, list_m1):
-        
-        batch_size = p0.shape[0] 
-             _,m, dim = t_source.shape
-        n = target.shape[1]
-        m0, m1, m2, nx = estep_res
-        c = w / (1.0 - w) * n / m
+    def m_step(self, p0, p1,m0, m1):
 
-        m1m0 = m1/(m0+eps)#np.divide(m1.T, m0).T
+        batch_size = p0.shape[0] 
+        _,m, dim = p0.shape
+        n = p0.shape[1]
+        #m0, m1, m2, nx = estep_res
+        c = 0#w / (1.0 - w) * n / m
+
+        m1m0 = m1/(m0.unsqueeze(2)+eps)#np.divide(m1.T, m0).T
         m0m0 = m0 / (m0 + c +eps)
+
+        sigma2 = self.sigma**2
         drxdx = m0m0 * 1.0 / sigma2#torch.sqrt(m0m0 * 1.0 / sigma2)
 
         if(drxdx.sum() != drxdx.sum() ) or (m1m0.sum() != m1m0.sum()):
             import pdb; pdb.set_trace()
 
-        dr, dt = self.compute_kabsch(t_source, m1m0, drxdx) 
-        rx = drxdx* (t_source - m1m0) #np.multiply(drxdx, (t_source - m1m0).T).T
-        rot, t = torch.matmul(dr, trans_p.rot), torch.matmul(trans_p.t.unsqueeze(1), dr.transpose(1,2)) + dt.unsqueeze(1)
-        t = t[:,0,:]
-        q = torch.norm(rx, dim=2).sum()
+        dr, dt = self.compute_kabsch(p1, m1m0, drxdx.unsqueeze(2)) 
 
-        return RigidTransformation(R, t)        
+        #rx = drxdx* (t_source - m1m0) #np.multiply(drxdx, (t_source - m1m0).T).T
+        #rot, t = torch.matmul(dr, trans_p.rot), torch.matmul(trans_p.t.unsqueeze(1), dr.transpose(1,2)) + dt.unsqueeze(1)
+        #t = t[:,0,:]
+        #q = torch.norm(rx, dim=2).sum()
+
+        return dr, dt#RigidTransformation(R, t)        
 
     def do_em(self, g0, p0, p1, maxiter, xtol):
         #p0: the target BxNx64
@@ -399,10 +413,10 @@ class PointEM(torch.nn.Module):
             #compute the target gaussian
 
             #do em
-            list_m0, list_m1 = self.e_step(p0, f0, f)
-            dx = self.m_step(p0, p1,list_m0, list_m1)
+            m0, m1 = self.e_step(p0, f0, f)
+            dr, dt = self.m_step(p0, p,m0, m1)
 
-            r = f - f0
+            #r = f - f0
 
             #dx = -pinv.bmm(r.unsqueeze(-1)).view(batch_size, 6)
 
@@ -410,13 +424,15 @@ class PointEM(torch.nn.Module):
             #norm_r = r.norm(p=2, dim=1)
             #print('itr,{},|r|,{}'.format(itr+1, ','.join(map(str, norm_r.data.tolist()))))
 
-            check = dx.norm(p=2, dim=1, keepdim=True).max()
-            if float(check) < xtol:
-                if itr == 0:
-                    self.last_err = 0 # no update.
-                break
-
-            g = self.update(g, dx)
+            #check = dx.norm(p=2, dim=1, keepdim=True).max()
+            #if float(check) < xtol:
+            #    if itr == 0:
+            #        self.last_err = 0 # no update.
+            #    break
+#
+            g = self.update_transformation_matrix(g, dr, dt)
+            import pdb; pdb.set_trace()
+            print(g)
             self.g_series[itr+1] = g.clone()
 
         rep = len(range(itr, maxiter))
@@ -424,5 +440,13 @@ class PointEM(torch.nn.Module):
 
         self.ptnet.train(training)
         return r, g, (itr+1)
+
+    def update_transformation_matrix(self,T, dr, dt):
+        T_new = T.clone()
+
+        T_new[:,0:3,0:3 ] = torch.matmul(dr, T[:,0:3, 0:3])
+        T_new[:,0:3,3] = torch.matmul(dr, T[:,0:3, 3].unsqueeze(2)).squeeze(2) + dt
+
+        return T_new
 
 #EOF

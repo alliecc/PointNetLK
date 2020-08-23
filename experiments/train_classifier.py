@@ -221,7 +221,6 @@ class Action:
         target = target.to(device)
 
         output = model(points)
-        import pdb; pdb.set_trace()
         loss = model.loss(output, target)
 
         return target, output, loss
