@@ -109,9 +109,11 @@ class PointNet_features(torch.nn.Module):
         self.tnet2 = TNet(mlp_h1[-1]) if use_tnet else None
 
         self.t_out_t2 = None
-        self.t_out_h1 = None
+        self.local_output_layer = torch.nn.Conv1d(mlp_h1[-1], mlp_h1[-1],1)
 
-    def forward(self, points):
+
+
+    def forward(self, points, return_local=False):
         """ points -> features
             [B, N, 3] -> [B, K]
         """
@@ -119,15 +121,17 @@ class PointNet_features(torch.nn.Module):
         if self.tnet1:
             t1 = self.tnet1(x)
             x = t1.bmm(x)
-
         x = self.h1(x)
         if self.tnet2:
             t2 = self.tnet2(x)
             self.t_out_t2 = t2
             x = t2.bmm(x)
         self.t_out_h1 = x # local features
+        if return_local:
+            return self.local_output_layer(x)
 
-        x = self.h2(x)
+        x = self.h2(x) #
+
         #x = flatten(torch.nn.functional.max_pool1d(x, x.size(-1)))
         x = flatten(self.sy(x))
 

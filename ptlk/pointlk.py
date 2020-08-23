@@ -134,7 +134,7 @@ class PointLK(torch.nn.Module):
         training = self.ptnet.training
         batch_size = p0.size(0)
 
-        g = g0
+        g = g0 #initial pose
         self.g_series = torch.zeros(maxiter+1, *g0.size(), dtype=g0.dtype)
         self.g_series[0] = g0.clone()
 
